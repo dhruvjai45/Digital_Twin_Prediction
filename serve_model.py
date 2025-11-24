@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime
 import uuid
 
-MODEL_PATH = "best_pipeline.joblib"
+MODEL_PATH = "D:\\D_desktop\\SWE_Project\\swe1\\Digital_Twin_Prediction\\best_pipeline.joblib"
 model_bundle = joblib.load(MODEL_PATH)
 
 preprocessor = model_bundle["pre"]
