@@ -1,0 +1,29 @@
+{
+  "created_at": "2025-11-23T14:39:09.688533",
+  "train_rows": 20000,
+  "numeric_features": [
+    "age",
+    "blood_pressure_systolic",
+    "blood_pressure_diastolic",
+    "heart_rate",
+    "respiratory_rate",
+    "body_temperature",
+    "oxygen_saturation",
+    "glucose_fasting",
+    "cholesterol_total",
+    "pain_score",
+    "diabetes",
+    "smoker",
+    "pulse_pressure",
+    "sys_dia_ratio",
+    "hr_spo2",
+    "age_sq",
+    "age_bin",
+    "missing_count"
+  ],
+  "categorical_features": [
+    "gender"
+  ],
+  "target": "readmitted_30_days",
+  "val_auc": 0.8669033854166668
+}
