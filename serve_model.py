@@ -14,7 +14,7 @@ import os
 # Load Model
 # --------------------------
 
-MODEL_PATH = "best_pipeline.joblib"
+MODEL_PATH = "D:\\D_desktop\\SWE_Project\\swe1\\Digital_Twin_Prediction\\best_pipeline.joblib"
 
 if not os.path.exists(MODEL_PATH):
     raise RuntimeError(f"Model file not found: {MODEL_PATH}")
