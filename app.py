@@ -1,8 +1,12 @@
-# app.py (complete) - includes rule-based overrides for critical edge cases
+# --------------------------------------------------------
+# app.py (Final Clean Version – NO ANOMALY MODEL)
+# For model: best_pipeline.joblib
+# --------------------------------------------------------
+
 import os
 import json
 from datetime import datetime
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, Union, Dict, Any
 from pathlib import Path
 
 import requests
@@ -15,116 +19,83 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Try import groq SDK; if not available we will still run (fallback descriptions)
+# Optional Groq AI
 try:
     from groq import Groq
     HAS_GROQ = True
-except Exception:
+except:
     HAS_GROQ = False
 
 load_dotenv()
 
-# ----------------------------
-# Config / env
-# ----------------------------
+# --------------------------------------------------------
+# Groq Config
+# --------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-# Model files (LOCAL relative paths – correct for Render)
-MODEL_LOCAL = "xgboost_model.joblib"
-PRE_LOCAL = "preprocessor.joblib"
-ANOMALY_LOCAL = "anomaly_model.joblib"
-
-print("Anomaly file exists? ->", Path(ANOMALY_LOCAL).exists())
-
-# Optional URLs to download from
-MODEL_URL = os.getenv("MODEL_URL")
-PREPROCESSOR_URL = os.getenv("PREPROCESSOR_URL")
-ANOMALY_URL = os.getenv("ANOMALY_URL")
-
-# ----------------------------
-# Groq client (if key present)
-# ----------------------------
 groq_client = None
 if HAS_GROQ and GROQ_API_KEY:
     groq_client = Groq(api_key=GROQ_API_KEY)
 
-# ----------------------------
-# Helper: download models at runtime if URLs provided
-# ----------------------------
-def download_file_if_needed(url: Optional[str], dest_path: str) -> bool:
-    dest = Path(dest_path)
-    if dest.exists() and dest.stat().st_size > 0:
-        return True
-    if not url:
-        return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(url, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-    return True
+# --------------------------------------------------------
+# MODEL FILES
+# --------------------------------------------------------
+MODEL_LOCAL = "best_pipeline.joblib"
 
-# try downloads
-try:
-    if MODEL_URL:
-        download_file_if_needed(MODEL_URL, MODEL_LOCAL)
-    if PREPROCESSOR_URL:
-        download_file_if_needed(PREPROCESSOR_URL, PRE_LOCAL)
-    if ANOMALY_URL:
-        download_file_if_needed(ANOMALY_URL, ANOMALY_LOCAL)
-except Exception as e:
-    # log but don't crash at this stage; load below will raise if missing
-    print("Warning: download failure:", e)
-
-# ----------------------------
-# Load models (joblib)
-# ----------------------------
-try:
-    model = joblib.load(MODEL_LOCAL)
-except Exception as e:
-    raise RuntimeError(f"Could not load main model from {MODEL_LOCAL}: {e}")
+print("\nLoading best_pipeline.joblib...")
 
 try:
-    preprocessor = joblib.load(PRE_LOCAL)
+    loaded = joblib.load(MODEL_LOCAL)
+    print("Loaded:", type(loaded))
 except Exception as e:
-    raise RuntimeError(f"Could not load preprocessor from {PRE_LOCAL}: {e}")
+    raise RuntimeError(f"❌ Could not load best_pipeline.joblib: {e}")
 
-# anomaly model is optional
-anomaly_model = None
-if Path(ANOMALY_LOCAL).exists():
-    try:
-        anomaly_model = joblib.load(ANOMALY_LOCAL)
-    except Exception as e:
-        print("Warning: could not load anomaly model:", e)
+# --------------------------------------------------------
+# Extract model components
+# --------------------------------------------------------
+if not isinstance(loaded, dict):
+    raise RuntimeError("❌ best_pipeline.joblib must contain a dict with keys: pre, regressor")
 
-# columns preprocessor expects (safe handling)
+preprocessor = loaded.get("pre", None)
+model = loaded.get("regressor", None)
+
+if preprocessor is None:
+    raise RuntimeError("❌ Missing 'pre' in best_pipeline.joblib")
+
+if model is None:
+    raise RuntimeError("❌ Missing 'regressor' in best_pipeline.joblib")
+
+# Feature names
 FEATURE_NAMES = getattr(preprocessor, "feature_names_in_", None)
 if FEATURE_NAMES is not None:
     FEATURE_NAMES = list(FEATURE_NAMES)
 
-# ----------------------------
-# FastAPI app
-# ----------------------------
-app = FastAPI(title="Digital Twin Prediction API (Groq Enhanced)", version="1.0")
 
-# serve index.html statically (if present)
+# --------------------------------------------------------
+# FastAPI initialization
+# --------------------------------------------------------
+app = FastAPI(
+    title="Digital Twin Prediction API",
+    version="2.0",
+)
+
+# serve UI if exists
 if Path("index.html").exists():
     app.mount("/static", StaticFiles(directory="."), name="static")
     @app.get("/", include_in_schema=False)
     def home():
         return FileResponse("index.html")
 
-# ----------------------------
+
+# --------------------------------------------------------
 # Request schema
-# ----------------------------
+# --------------------------------------------------------
 class PatientInput(BaseModel):
     patient_id: Union[str, int]
     age: float
     weight: float
-    blood_pressure: str  # e.g. "118/76"
+    blood_pressure: str
     heart_rate: float
     respiration: float
     spo2: float
@@ -135,18 +106,20 @@ class PatientInput(BaseModel):
     timestamp: Optional[str] = None
     device_id: Optional[str] = None
 
-# ----------------------------
-# Helpers
-# ----------------------------
+
+# --------------------------------------------------------
+# Helper Functions
+# --------------------------------------------------------
 def parse_blood_pressure(bp_str: str):
     try:
         s, d = bp_str.replace(" ", "").split("/")
         return float(s), float(d)
-    except Exception:
+    except:
         raise HTTPException(status_code=400, detail="Invalid blood_pressure format. Use '120/80'.")
 
 def build_feature_dataframe(data: PatientInput) -> pd.DataFrame:
     sbp, dbp = parse_blood_pressure(data.blood_pressure)
+
     row = {
         "age": data.age,
         "weight": data.weight,
@@ -164,269 +137,169 @@ def build_feature_dataframe(data: PatientInput) -> pd.DataFrame:
         "device_id": data.device_id or "unknown",
         "missing_dummy": 0.0,
     }
+
     df = pd.DataFrame([row])
 
-    # derived features (match training)
-    try:
-        df["pulse_pressure"] = df["blood_pressure_systolic"] - df["blood_pressure_diastolic"]
-    except Exception:
-        df["pulse_pressure"] = np.nan
-    try:
-        df["sys_dia_ratio"] = df["blood_pressure_systolic"] / df["blood_pressure_diastolic"].replace(0, np.nan)
-    except Exception:
-        df["sys_dia_ratio"] = np.nan
-    try:
-        df["hr_spo2"] = df["heart_rate"] * df["oxygen_saturation"]
-    except Exception:
-        df["hr_spo2"] = np.nan
-    try:
-        df["age_sq"] = df["age"] ** 2
-    except Exception:
-        df["age_sq"] = np.nan
-    try:
-        df["age_bin"] = pd.cut(df["age"], bins=[0,25,40,55,70,200], labels=False)
-    except Exception:
-        df["age_bin"] = 2
+    # Derived features
+    df["pulse_pressure"] = df["blood_pressure_systolic"] - df["blood_pressure_diastolic"]
+
+    # FIXED (correct sys/dia ratio)
+    df["sys_dia_ratio"] = df["blood_pressure_systolic"] / df["blood_pressure_diastolic"].replace(0, np.nan)
+
+    df["hr_spo2"] = df["heart_rate"] * df["oxygen_saturation"]
+    df["age_sq"] = df["age"] ** 2
+    df["age_bin"] = pd.cut(df["age"], bins=[0,25,40,55,70,200], labels=False)
     df["missing_count"] = df.isna().sum(axis=1)
+
     return df
 
-def ai_generate_description(observation_name: str, value: Any) -> str:
-    """
-    Generates a concise description using Groq if available,
-    otherwise returns a safe fallback.
-    """
-    prompt = f"""
-You are a clinical assistant.
-
-Observation: {observation_name}
-Value: {value}
-
-In 1-2 sentences, say whether this value is normal, borderline, or concerning and what it commonly indicates clinically.
-Be concise, professional.
-"""
+def ai_generate_description(name: str, value: Any) -> str:
     if groq_client is None:
-        return f"No AI description available. Observation {observation_name} = {value}."
+        return f"{name} = {value}."
+
+    prompt = f"""
+Give a short clinical interpretation for:
+{name}: {value}
+"""
+
     try:
-        completion = groq_client.chat.completions.create(
+        out = groq_client.chat.completions.create(
             model=GROQ_MODEL,
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=120,
             temperature=0.2,
         )
-        text = completion.choices[0].message.content
-        return text.strip()
-    except Exception as e:
-        return f"AI description unavailable (error: {e}). Observation {observation_name} = {value}."
+        return out.choices[0].message.content.strip()
+    except:
+        return f"{name} = {value}."
 
-def ai_generate_summary(result_payload: Dict[str, Any]) -> str:
-    prompt = f"""
-You are a medical decision-support assistant.
 
-Summarize the following JSON about a patient's vitals and model readmission risk:
-
-{json.dumps(result_payload, ensure_ascii=False)}
-
-Write 4-6 sentences:
-- comment on vital stability/abnormalities
-- interpret readmission risk and probability
-- remind that this is decision support, not a diagnosis
-"""
+def ai_generate_summary(payload: Dict[str, Any]):
     if groq_client is None:
-        return "AI summary not available. Interpret results using the observations and probability."
+        return "AI summary unavailable."
+
+    prompt = f"""
+Summarize this patient's vitals and risk:
+
+{json.dumps(payload)}
+
+Write 4–6 clear medical sentences.
+"""
+
     try:
-        completion = groq_client.chat.completions.create(
+        out = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[{"role":"user","content":prompt}],
-            max_tokens=220,
+            max_tokens=200,
             temperature=0.25,
         )
-        return completion.choices[0].message.content.strip()
-    except Exception as e:
-        return f"Summary generation failed (error: {e}). Use raw values to interpret the case."
+        return out.choices[0].message.content.strip()
+    except:
+        return "Summary unavailable."
+
 
 def risk_level(prob: float) -> str:
-    if prob < 0.33:
-        return "low"
-    if prob < 0.66:
-        return "medium"
+    if prob < 0.33: return "low"
+    if prob < 0.66: return "medium"
     return "high"
 
-def level_for_observation(name: str, value: Any, readmission_risk_level: str = None, anomaly_flag: str = None) -> Optional[str]:
-    """
-    Return a human-readable level for an observation value.
-    Levels: 'low'/'normal'/'elevated'/'high'/'critical'/'unknown'
-    This function uses conservative, generic thresholds.
-    """
-    if value is None:
-        return "unknown"
 
-    # numeric coercion where possible
+def level_for_observation(name: str, v: float) -> str:
+    if v is None: return "unknown"
+
     try:
-        v = float(value)
-    except Exception:
-        # non-numeric observations (e.g., device_id) -> unknown
-        if name == "readmission_risk":
-            return readmission_risk_level or "unknown"
-        if name == "anomaly_score":
-            return anomaly_flag or "unknown"
+        v = float(v)
+    except:
         return "unknown"
-
-    # thresholds by observation
-    if name == "blood_pressure_systolic":
-        if v >= 180:
-            return "critical"
-        if v >= 140:
-            return "high"
-        if v >= 130:
-            return "elevated"
-        if v >= 120:
-            return "elevated"
-        if v < 90:
-            return "low"
-        return "normal"
-
-    if name == "blood_pressure_diastolic":
-        if v >= 120:
-            return "critical"
-        if v >= 90:
-            return "high"
-        if v >= 80:
-            return "elevated"
-        if v < 60:
-            return "low"
-        return "normal"
 
     if name == "heart_rate":
-        if v < 30:
-            return "critical"
-        if v < 50:
-            return "low"
-        if v <= 100:
-            return "normal"
-        if v <= 140:
-            return "high"
+        if v < 30: return "critical"
+        if v < 50: return "low"
+        if v <= 100: return "normal"
+        if v <= 140: return "high"
         return "critical"
 
     if name == "oxygen_saturation":
-        # SpO2 as percentage
-        if v >= 95:
-            return "normal"
-        if 90 <= v < 95:
-            return "low"
+        if v >= 95: return "normal"
+        if v >= 90: return "low"
         return "critical"
 
     if name == "respiratory_rate":
-        if v < 8:
-            return "critical"
-        if v < 12:
-            return "low"
-        if 12 <= v <= 20:
-            return "normal"
-        if 21 <= v <= 30:
-            return "high"
+        if v < 8: return "critical"
+        if v < 12: return "low"
+        if v <= 20: return "normal"
+        if v <= 30: return "high"
         return "critical"
 
-    if name in ("temperature", "body_temperature", "temp"):
-        # assuming Fahrenheit as your example values used F
-        if v < 92:
-            return "critical"
-        if v <= 99.5:
-            return "normal"
-        if v <= 102:
-            return "high"
+    if name == "temperature":
+        if v < 95: return "critical"
+        if v <= 99.5: return "normal"
+        if v <= 102: return "high"
         return "critical"
 
-    if name in ("glucose_fasting", "glucose"):
-        if v < 40:
-            return "critical"
-        if v < 70:
-            return "low"
-        if v < 100:
-            return "normal"
-        if v < 126:
-            return "elevated"
+    if name in ("glucose", "glucose_fasting"):
+        if v < 70: return "low"
+        if v < 100: return "normal"
+        if v < 126: return "elevated"
         return "high"
 
+    if name == "blood_pressure_systolic":
+        if v >= 180: return "critical"
+        if v >= 140: return "high"
+        if v >= 130: return "elevated"
+        if v < 90: return "low"
+        return "normal"
+
+    if name == "blood_pressure_diastolic":
+        if v >= 120: return "critical"
+        if v >= 90: return "high"
+        if v >= 80: return "elevated"
+        if v < 60: return "low"
+        return "normal"
+
     if name == "weight":
-        # generic fallback: extreme values only
-        if v < 30:
-            return "low"
-        if v > 200:
-            return "high"
+        if v < 30: return "low"
+        if v > 200: return "high"
         return "normal"
 
     if name == "readmission_risk":
-        return readmission_risk_level or risk_level(v)
+        return risk_level(v)
 
-    if name == "anomaly_score":
-        # treat negative decision function as anomaly (model-specific)
-        if anomaly_flag:
-            return anomaly_flag
-        # fallback thresholds (model dependent) - more negative -> more anomalous
-        try:
-            if v < -3.0:
-                return "critical"
-            if v < -1.0:
-                return "high"
-            return "normal"
-        except Exception:
-            return "unknown"
-
-    # default
     return "unknown"
 
-# ----------------------------
-# Routes
-# ----------------------------
-@app.get("/health")
-def health():
-    return {"status":"ok","timestamp": datetime.utcnow().isoformat() + "Z"}
 
+# --------------------------------------------------------
+# Prediction Route
+# --------------------------------------------------------
 @app.post("/predict")
 def predict(data: PatientInput):
-    # build features
+
+    # Build features
     df = build_feature_dataframe(data)
 
-    # align with preprocessor's feature list
+    # Align with preprocessor
     if FEATURE_NAMES:
-        for c in FEATURE_NAMES:
-            if c not in df.columns:
-                df[c] = np.nan
-        df = df[list(FEATURE_NAMES)]
+        for col in FEATURE_NAMES:
+            if col not in df.columns:
+                df[col] = np.nan
+        df = df[FEATURE_NAMES]
 
-    # transform
+    # Apply preprocessing
     try:
         X = preprocessor.transform(df)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Preprocessor transform failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Preprocessor failed: {e}")
 
-    # predict
+    # Predict (LGBMRegressor gives .predict(), NOT predict_proba)
     try:
-        proba = float(model.predict_proba(X)[0][1])
-        label = int(proba >= 0.5)
-        risk = risk_level(proba)
+        proba = float(model.predict(X)[0])  # READMISSION PROBABILITY
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model prediction failed: {e}")
 
-    # anomaly
-    anomaly_score = None
-    anomaly_flag = "unknown"
-    if anomaly_model is not None:
-        try:
-            # decision_function exists on IsolationForest; some models return anomaly score differently
-            if hasattr(anomaly_model, "decision_function"):
-                score = float(anomaly_model.decision_function(X)[0])
-                anomaly_score = score
-                anomaly_flag = "yes" if score < -0.3 else "no"
-            elif hasattr(anomaly_model, "score_samples"):
-                score = float(anomaly_model.score_samples(X)[0])
-                anomaly_score = score
-                anomaly_flag = "yes" if score < -3.0 else "no"
-        except Exception as e:
-            anomaly_score = None
-            anomaly_flag = "unknown"
+    label = int(proba >= 0.5)
+    risk = risk_level(proba)
 
-    # build observations
+    # Build observations
     sbp, dbp = parse_blood_pressure(data.blood_pressure)
     vitals = {
         "blood_pressure_systolic": sbp,
@@ -438,162 +311,44 @@ def predict(data: PatientInput):
         "glucose_fasting": data.glucose,
         "weight": data.weight,
         "readmission_risk": proba,
-        "anomaly_score": anomaly_score,
     }
 
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    time_now = datetime.utcnow().isoformat() + "Z"
+
     observations = []
     for name, value in vitals.items():
-        desc = ai_generate_description(name, value)
-        lvl = level_for_observation(name, value, readmission_risk_level=risk, anomaly_flag=anomaly_flag)
         observations.append({
             "name": name,
             "value": value,
-            "level": lvl,
-            "description": desc,
-            "updated_at": now_iso,
+            "level": level_for_observation(name, value),
+            "description": ai_generate_description(name, value),
+            "updated_at": time_now,
             "patient_id": str(data.patient_id),
         })
 
-    # -------------------------------
-    # Rule-based override for edge cases (no model change)
-    # -------------------------------
-    def check_vital_overrides(inp: PatientInput):
-        """
-        Return (override_decision, override_level, override_reason, min_probability).
-        override_level: 'high' / 'medium' / None
-        min_probability: minimum probability to enforce (float, e.g. 0.95)
-        """
-        reasons = []
-        critical = 0
-        moderate = 0
-
-        # parse BP
-        try:
-            s, d = parse_blood_pressure(inp.blood_pressure)
-        except HTTPException:
-            s, d = np.nan, np.nan
-
-        hr = float(inp.heart_rate) if inp.heart_rate is not None else np.nan
-        spo2 = float(inp.spo2) if inp.spo2 is not None else np.nan
-        rr = float(inp.respiration) if inp.respiration is not None else np.nan
-        temp = float(inp.temperature) if inp.temperature is not None else np.nan
-        gluc = float(inp.glucose) if inp.glucose is not None else np.nan
-        w = float(inp.weight) if inp.weight is not None else np.nan
-        prior = float(getattr(inp, "prior_admissions_90d", 0) or 0)
-        comorb = float(getattr(inp, "comorbidity_count", 0) or 0)
-
-        # CRITICAL checks (override to HIGH)
-        # - heart rate impossible / extremely low or absent
-        if hr == 0 or hr < 30:
-            critical += 1
-            reasons.append(f"heart_rate={hr} (critical — possible cardiac arrest or severe bradycardia)")
-
-        # - extreme tachycardia
-        if hr >= 140:
-            critical += 1
-            reasons.append(f"heart_rate={hr} (critical — severe tachycardia)")
-
-        # - very low oxygen saturation
-        if spo2 < 85:
-            critical += 1
-            reasons.append(f"spo2={spo2}% (critical hypoxemia)")
-
-        # - dangerously low/high blood pressure
-        if not np.isnan(s):
-            if s < 80 or s > 200:
-                critical += 1
-                reasons.append(f"systolic={s} (critical blood pressure)")
-
-        if not np.isnan(d):
-            if d < 50 or d > 130:
-                critical += 1
-                reasons.append(f"diastolic={d} (critical blood pressure)")
-
-        # - respiratory rate dangerously high/low
-        if rr < 8 or rr > 35:
-            critical += 1
-            reasons.append(f"respiratory_rate={rr} (critical)")
-
-        # - temperature extreme
-        if temp < 92 or temp > 105:
-            critical += 1
-            reasons.append(f"temperature={temp} (critical)")
-
-        # - glucose extremely high/low
-        if gluc > 400 or gluc < 30:
-            critical += 1
-            reasons.append(f"glucose={gluc} (critical)")
-
-        # MODERATE checks (bump to medium)
-        if 30 <= hr < 40 or 100 <= hr < 140:
-            moderate += 1
-            reasons.append(f"heart_rate={hr} (moderately abnormal)")
-
-        if 85 <= spo2 < 92:
-            moderate += 1
-            reasons.append(f"spo2={spo2}% (low)")
-
-        if 80 <= s < 90 or 160 < s <= 200:
-            moderate += 1
-            reasons.append(f"systolic={s} (moderate)")
-
-        if 50 <= d < 60 or 110 < d <= 130:
-            moderate += 1
-            reasons.append(f"diastolic={d} (moderate)")
-
-        # severe recent history
-        if prior >= 2 or comorb >= 3:
-            moderate += 1
-            reasons.append(f"prior_admissions_90d={prior} or comorbidity_count={comorb} (risk history)")
-
-        # weight obviously wrong / missing
-        if w == 0 or np.isnan(w):
-            moderate += 1
-            reasons.append(f"weight={w} (missing or zero)")
-
-        # Build result
-        if critical > 0:
-            return True, "high", "; ".join(reasons), 0.95
-        if moderate >= 2:
-            return True, "medium", "; ".join(reasons), 0.60
-        return False, None, None, None
-
-    override, override_level, override_reason, override_min_prob = check_vital_overrides(data)
-
-    # enforce override if needed
-    if override:
-        # bump probability if below min
-        if override_min_prob is not None and proba < override_min_prob:
-            proba = float(override_min_prob)
-        label = 1 if override_level == "high" else int(proba >= 0.5)
-        risk = override_level
-        # update the readmission observation and add override note
-        for obs in observations:
-            if obs["name"] == "readmission_risk":
-                obs["value"] = proba
-                obs["level"] = risk
-                obs["description"] = obs["description"] + " (OVERRIDDEN by rule: " + (override_reason or "critical vitals") + ")"
-                break
-
+    # Summary
     result = {
         "status": "ok",
         "patient_id": str(data.patient_id),
         "probability": proba,
-        "predicted_label": int(label),
+        "predicted_label": label,
         "risk": risk,
-        "anomaly_score": anomaly_score,
-        "anomaly_flag": anomaly_flag,
-        "observations": observations
+        "observations": observations,
+        "override_applied": False,
+        "description": ai_generate_summary({
+            "probability": proba,
+            "risk": risk,
+            "vitals": vitals
+        }),
+        "timestamp": time_now
     }
 
-    # add override reason in top-level output for transparency
-    if override:
-        result["override_applied"] = True
-        result["override_reason"] = override_reason
-    else:
-        result["override_applied"] = False
-
-    result["description"] = ai_generate_summary(result)
-    result["timestamp"] = now_iso
     return result
+
+
+# --------------------------------------------------------
+# Health check
+# --------------------------------------------------------
+@app.get("/health")
+def health():
+    return {"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}
