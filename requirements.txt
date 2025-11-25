@@ -1,8 +1,11 @@
 fastapi
-uvicorn
-numpy
+uvicorn[standard]
+gunicorn
 pandas
+numpy
 joblib
-scikit-learn==1.7.0
-lightgbm
-pydantic
+scikit-learn
+xgboost
+python-dotenv
+requests
+groq

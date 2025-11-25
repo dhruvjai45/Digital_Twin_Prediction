@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Digital Twin – Readmission Risk & Vitals Analyzer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #0f172a;
+      color: #e5e7eb;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+    }
+    .container {
+      width: 100%;
+      max-width: 1100px;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.5fr);
+      gap: 20px;
+    }
+    @media (max-width: 900px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+    }
+    .card {
+      background: #020617;
+      border-radius: 16px;
+      padding: 20px 22px;
+      box-shadow: 0 18px 40px rgba(15,23,42,0.7);
+      border: 1px solid rgba(148,163,184,0.25);
+    }
+    h1, h2 {
+      margin: 0 0 10px;
+    }
+    h1 {
+      font-size: 1.3rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    h1 span.logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 30%, #38bdf8, #6366f1);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #0f172a;
+      font-size: 0.8rem;
+    }
+    .subtitle {
+      font-size: 0.85rem;
+      color: #9ca3af;
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      margin-bottom: 3px;
+      color: #cbd5f5;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 10px;
+    }
+    .field {
+      margin-bottom: 10px;
+    }
+    input, select {
+      width: 100%;
+      background: #020617;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      padding: 6px 8px;
+      color: #e5e7eb;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 1px rgba(56,189,248,0.3);
+    }
+    button {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      border: none;
+      border-radius: 999px;
+      color: #022c22;
+      font-weight: 600;
+      padding: 8px 18px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      background: rgba(15,23,42,0.9);
+      border: 1px solid #334155;
+      color: #e5e7eb;
+    }
+    .pill.low {
+      border-color: #22c55e;
+      color: #bbf7d0;
+    }
+    .pill.medium {
+      border-color: #f97316;
+      color: #fed7aa;
+    }
+    .pill.high {
+      border-color: #ef4444;
+      color: #fecaca;
+    }
+    .pill.anomalous {
+      border-color: #f97316;
+      color: #fed7aa;
+    }
+    .pill.normal {
+      border-color: #22c55e;
+      color: #bbf7d0;
+    }
+    .section-title {
+      font-size: 0.9rem;
+      margin: 4px 0 8px;
+      color: #e5e7eb;
+    }
+    .description-block {
+      font-size: 0.8rem;
+      line-height: 1.4;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: #020617;
+      border: 1px solid #1e293b;
+      max-height: 260px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .obs-list {
+      max-height: 320px;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid #1f2933;
+      background: #020617;
+      padding: 6px 8px;
+      font-size: 0.8rem;
+    }
+    .obs-item {
+      border-bottom: 1px solid #111827;
+      padding: 6px 4px;
+    }
+    .obs-item:last-child {
+      border-bottom: none;
+    }
+    .obs-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+    .obs-name {
+      font-size: 0.8rem;
+      text-transform: lowercase;
+    }
+    .obs-value {
+      font-size: 0.8rem;
+      color: #a5b4fc;
+    }
+    .obs-desc {
+      margin-top: 3px;
+      color: #9ca3af;
+    }
+    .badge {
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      border: 1px solid #4b5563;
+      color: #9ca3af;
+    }
+    .error {
+      margin-top: 8px;
+      color: #fecaca;
+      font-size: 0.78rem;
+    }
+    .json-view {
+      margin-top: 6px;
+      font-size: 0.75rem;
+      background: #020617;
+      border-radius: 10px;
+      border: 1px solid #1e293b;
+      padding: 6px 8px;
+      max-height: 260px;
+      overflow: auto;
+      white-space: pre;
+    }
+    .small-note {
+      font-size: 0.75rem;
+      color: #6b7280;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Left: Form -->
+    <div class="card">
+      <h1>
+        <span class="logo">DT</span>
+        Digital Twin – Risk API
+      </h1>
+      <div class="subtitle">
+        Send patient vitals to your local FastAPI backend and inspect model + Grok AI interpretation.
+      </div>
+
+      <form id="predict-form">
+        <div class="field">
+          <label for="patient_id">Patient ID</label>
+          <input id="patient_id" name="patient_id" placeholder="P100" value="P100" />
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="age">Age (years)</label>
+            <input id="age" name="age" type="number" step="1" value="30" />
+          </div>
+          <div class="field">
+            <label for="weight">Weight (kg)</label>
+            <input id="weight" name="weight" type="number" step="0.1" value="70" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="blood_pressure">Blood Pressure (e.g., 118/76)</label>
+            <input id="blood_pressure" name="blood_pressure" value="118/76" />
+          </div>
+          <div class="field">
+            <label for="heart_rate">Heart Rate (bpm)</label>
+            <input id="heart_rate" name="heart_rate" type="number" step="1" value="72" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="respiration">Respiratory Rate (breaths/min)</label>
+            <input id="respiration" name="respiration" type="number" step="1" value="16" />
+          </div>
+          <div class="field">
+            <label for="spo2">SpO₂ (%)</label>
+            <input id="spo2" name="spo2" type="number" step="0.1" value="98" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="temperature">Temperature (°F)</label>
+            <input id="temperature" name="temperature" type="number" step="0.1" value="98.6" />
+          </div>
+          <div class="field">
+            <label for="glucose">Glucose (mg/dL)</label>
+            <input id="glucose" name="glucose" type="number" step="1" value="90" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="comorbidity_count">Comorbidities (count)</label>
+            <input id="comorbidity_count" name="comorbidity_count" type="number" step="1" value="0" />
+          </div>
+          <div class="field">
+            <label for="prior_admissions_90d">Admissions (last 90 days)</label>
+            <input id="prior_admissions_90d" name="prior_admissions_90d" type="number" step="1" value="0" />
+          </div>
+        </div>
+
+        <button type="submit" id="submit-btn">
+          <span>🚀 Predict & Explain</span>
+        </button>
+        <div id="error" class="error" style="display:none;"></div>
+        <div class="small-note">
+          Backend URL: <code>http://127.0.0.1:8000/predict</code> (make sure FastAPI is running).
+        </div>
+      </form>
+    </div>
+
+    <!-- Right: Results -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <h2 style="font-size:1rem;">Result</h2>
+        <div id="status-pill" class="pill" style="display:none;"></div>
+      </div>
+
+      <div class="section-title">AI Clinical Summary</div>
+      <div id="overall-description" class="description-block">
+        Submit a request to see the AI-generated explanation here.
+      </div>
+
+      <div class="section-title" style="margin-top:10px;">Observations</div>
+      <div id="obs-list" class="obs-list">
+        <div style="color:#6b7280;">No observations yet.</div>
+      </div>
+
+      <div class="section-title" style="margin-top:10px;">Raw JSON</div>
+      <div id="json-view" class="json-view">
+        {}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("predict-form");
+    const errorDiv = document.getElementById("error");
+    const submitBtn = document.getElementById("submit-btn");
+    const statusPill = document.getElementById("status-pill");
+    const overallDescription = document.getElementById("overall-description");
+    const obsList = document.getElementById("obs-list");
+    const jsonView = document.getElementById("json-view");
+
+    const API_URL = "http://127.0.0.1:8000/predict";
+
+    function buildPayload() {
+      const toNumber = (id) => {
+        const v = document.getElementById(id).value;
+        return v === "" ? null : Number(v);
+      };
+
+      return {
+        patient_id: document.getElementById("patient_id").value || null,
+        age: toNumber("age"),
+        weight: toNumber("weight"),
+        blood_pressure: document.getElementById("blood_pressure").value || null,
+        heart_rate: toNumber("heart_rate"),
+        respiration: toNumber("respiration"),
+        spo2: toNumber("spo2"),
+        temperature: toNumber("temperature"),
+        glucose: toNumber("glucose"),
+        comorbidity_count: toNumber("comorbidity_count"),
+        prior_admissions_90d: toNumber("prior_admissions_90d")
+      };
+    }
+
+    function setLoading(isLoading) {
+      submitBtn.disabled = isLoading;
+      submitBtn.textContent = isLoading ? "Running model + Grok..." : "🚀 Predict & Explain";
+    }
+
+    function colorForRisk(risk) {
+      if (risk === "high") return "pill high";
+      if (risk === "medium") return "pill medium";
+      if (risk === "low") return "pill low";
+      return "pill";
+    }
+
+    function colorForAnomaly(flag) {
+      if (flag === "anomalous") return "pill anomalous";
+      if (flag === "normal") return "pill normal";
+      return "pill";
+    }
+
+    function renderResult(data) {
+      // Overall pill
+      let pillText = "";
+      let pillClass = "pill";
+      if (data.status === "invalid_input") {
+        pillText = "Invalid input (validation error)";
+        pillClass = "pill";
+      } else {
+        pillText = `Risk: ${data.risk || "n/a"}`;
+        pillClass = colorForRisk(data.risk);
+      }
+      statusPill.style.display = "inline-flex";
+      statusPill.className = pillClass;
+      statusPill.textContent = pillText;
+
+      // Overall explanation
+      overallDescription.textContent = data.description || data.explanation || "No explanation returned.";
+
+      // Observations
+      obsList.innerHTML = "";
+      if (Array.isArray(data.observations) && data.observations.length > 0) {
+        data.observations.forEach((o) => {
+          if (o == null) return;
+          const div = document.createElement("div");
+          div.className = "obs-item";
+
+          const header = document.createElement("div");
+          header.className = "obs-header";
+
+          const nameSpan = document.createElement("div");
+          nameSpan.className = "obs-name";
+          nameSpan.textContent = o.name;
+
+          const valueSpan = document.createElement("div");
+          valueSpan.className = "obs-value";
+          valueSpan.textContent = o.value === null || o.value === undefined ? "—" : o.value;
+
+          header.appendChild(nameSpan);
+          header.appendChild(valueSpan);
+
+          const descDiv = document.createElement("div");
+          descDiv.className = "obs-desc";
+          descDiv.textContent = o.description || "(no description)";
+
+          const levelSpan = document.createElement("span");
+          levelSpan.className = "badge";
+          levelSpan.textContent = o.level ? `level: ${o.level}` : "level: n/a";
+
+          const metaRow = document.createElement("div");
+          metaRow.style.display = "flex";
+          metaRow.style.justifyContent = "space-between";
+          metaRow.style.alignItems = "center";
+          metaRow.style.marginTop = "3px";
+          metaRow.appendChild(descDiv);
+          metaRow.appendChild(levelSpan);
+
+          div.appendChild(header);
+          div.appendChild(metaRow);
+          obsList.appendChild(div);
+        });
+      } else {
+        const msg = document.createElement("div");
+        msg.style.color = "#6b7280";
+        msg.textContent = "No observations in response.";
+        obsList.appendChild(msg);
+      }
+
+      // Raw JSON
+      jsonView.textContent = JSON.stringify(data, null, 2);
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorDiv.style.display = "none";
+      errorDiv.textContent = "";
+
+      const payload = buildPayload();
+      setLoading(true);
+
+      try {
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`HTTP ${res.status}: ${text}`);
+        }
+
+        const data = await res.json();
+        renderResult(data);
+      } catch (err) {
+        console.error(err);
+        errorDiv.style.display = "block";
+        errorDiv.textContent = "Request failed: " + err.message;
+      } finally {
+        setLoading(false);
+      }
+    });
+  </script>
+</body>
+</html>
