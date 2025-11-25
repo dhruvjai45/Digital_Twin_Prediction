@@ -1,4 +1,4 @@
-# app.py
+# app.py (updated: observations now include 'level' for each item)
 import os
 import json
 from datetime import datetime
@@ -34,6 +34,9 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 MODEL_LOCAL = "xgboost_model.joblib"
 PRE_LOCAL = "preprocessor.joblib"
 ANOMALY_LOCAL = "anomaly_model.joblib"
+
+print("Anomaly file exists? ->", Path(ANOMALY_LOCAL).exists())
+
 
 # Optional URLs to download from
 MODEL_URL = os.getenv("MODEL_URL")
@@ -249,6 +252,124 @@ def risk_level(prob: float) -> str:
         return "medium"
     return "high"
 
+def level_for_observation(name: str, value: Any, readmission_risk_level: str = None, anomaly_flag: str = None) -> Optional[str]:
+    """
+    Return a human-readable level for an observation value.
+    Levels: 'low'/'normal'/'elevated'/'high'/'critical'/'unknown'
+    This function uses conservative, generic thresholds.
+    """
+    if value is None:
+        return "unknown"
+
+    # numeric coercion where possible
+    try:
+        v = float(value)
+    except Exception:
+        # non-numeric observations (e.g., device_id) -> unknown
+        if name == "readmission_risk":
+            return readmission_risk_level or "unknown"
+        if name == "anomaly_score":
+            return anomaly_flag or "unknown"
+        return "unknown"
+
+    # thresholds by observation
+    if name == "blood_pressure_systolic":
+        if v >= 180:
+            return "critical"
+        if v >= 140:
+            return "high"
+        if v >= 130:
+            return "elevated"
+        if v >= 120:
+            return "elevated"
+        if v < 90:
+            return "low"
+        return "normal"
+
+    if name == "blood_pressure_diastolic":
+        if v >= 120:
+            return "critical"
+        if v >= 90:
+            return "high"
+        if v >= 80:
+            return "elevated"
+        if v < 60:
+            return "low"
+        return "normal"
+
+    if name == "heart_rate":
+        if v < 50:
+            return "low"
+        if v <= 100:
+            return "normal"
+        if v <= 140:
+            return "high"
+        return "critical"
+
+    if name == "oxygen_saturation":
+        # SpO2 as percentage
+        if v >= 95:
+            return "normal"
+        if 90 <= v < 95:
+            return "low"
+        return "critical"
+
+    if name == "respiratory_rate":
+        if v < 12:
+            return "low"
+        if 12 <= v <= 20:
+            return "normal"
+        if 21 <= v <= 30:
+            return "high"
+        return "critical"
+
+    if name in ("temperature", "body_temperature", "temp"):
+        # assuming Fahrenheit as your example values used F
+        if v < 95:
+            return "critical"
+        if v <= 99.5:
+            return "normal"
+        if v <= 102:
+            return "high"
+        return "critical"
+
+    if name in ("glucose_fasting", "glucose"):
+        if v < 70:
+            return "low"
+        if v < 100:
+            return "normal"
+        if v < 126:
+            return "elevated"
+        return "high"
+
+    if name == "weight":
+        # generic fallback: extreme values only
+        if v < 30:
+            return "low"
+        if v > 200:
+            return "high"
+        return "normal"
+
+    if name == "readmission_risk":
+        return readmission_risk_level or risk_level(v)
+
+    if name == "anomaly_score":
+        # treat negative decision function as anomaly (model-specific)
+        if anomaly_flag:
+            return anomaly_flag
+        # fallback thresholds (model dependent) - more negative -> more anomalous
+        try:
+            if v < -3.0:
+                return "critical"
+            if v < -1.0:
+                return "high"
+            return "normal"
+        except Exception:
+            return "unknown"
+
+    # default
+    return "unknown"
+
 # ----------------------------
 # Routes
 # ----------------------------
@@ -319,10 +440,11 @@ def predict(data: PatientInput):
     observations = []
     for name, value in vitals.items():
         desc = ai_generate_description(name, value)
+        lvl = level_for_observation(name, value, readmission_risk_level=risk, anomaly_flag=anomaly_flag)
         observations.append({
             "name": name,
             "value": value,
-            "level": (risk if name == "readmission_risk" else None),
+            "level": lvl,
             "description": desc,
             "updated_at": now_iso,
             "patient_id": str(data.patient_id),
