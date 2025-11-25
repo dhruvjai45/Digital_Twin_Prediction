@@ -9,3 +9,4 @@ xgboost
 python-dotenv
 requests
 groq
+lightgbm==4.3.0
