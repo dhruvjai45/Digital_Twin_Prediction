@@ -1,4 +1,4 @@
-# app.py (updated: observations now include 'level' for each item)
+# app.py (complete) - includes rule-based overrides for critical edge cases
 import os
 import json
 from datetime import datetime
@@ -36,7 +36,6 @@ PRE_LOCAL = "preprocessor.joblib"
 ANOMALY_LOCAL = "anomaly_model.joblib"
 
 print("Anomaly file exists? ->", Path(ANOMALY_LOCAL).exists())
-
 
 # Optional URLs to download from
 MODEL_URL = os.getenv("MODEL_URL")
@@ -298,6 +297,8 @@ def level_for_observation(name: str, value: Any, readmission_risk_level: str = N
         return "normal"
 
     if name == "heart_rate":
+        if v < 30:
+            return "critical"
         if v < 50:
             return "low"
         if v <= 100:
@@ -315,6 +316,8 @@ def level_for_observation(name: str, value: Any, readmission_risk_level: str = N
         return "critical"
 
     if name == "respiratory_rate":
+        if v < 8:
+            return "critical"
         if v < 12:
             return "low"
         if 12 <= v <= 20:
@@ -325,7 +328,7 @@ def level_for_observation(name: str, value: Any, readmission_risk_level: str = N
 
     if name in ("temperature", "body_temperature", "temp"):
         # assuming Fahrenheit as your example values used F
-        if v < 95:
+        if v < 92:
             return "critical"
         if v <= 99.5:
             return "normal"
@@ -334,6 +337,8 @@ def level_for_observation(name: str, value: Any, readmission_risk_level: str = N
         return "critical"
 
     if name in ("glucose_fasting", "glucose"):
+        if v < 40:
+            return "critical"
         if v < 70:
             return "low"
         if v < 100:
@@ -450,16 +455,144 @@ def predict(data: PatientInput):
             "patient_id": str(data.patient_id),
         })
 
+    # -------------------------------
+    # Rule-based override for edge cases (no model change)
+    # -------------------------------
+    def check_vital_overrides(inp: PatientInput):
+        """
+        Return (override_decision, override_level, override_reason, min_probability).
+        override_level: 'high' / 'medium' / None
+        min_probability: minimum probability to enforce (float, e.g. 0.95)
+        """
+        reasons = []
+        critical = 0
+        moderate = 0
+
+        # parse BP
+        try:
+            s, d = parse_blood_pressure(inp.blood_pressure)
+        except HTTPException:
+            s, d = np.nan, np.nan
+
+        hr = float(inp.heart_rate) if inp.heart_rate is not None else np.nan
+        spo2 = float(inp.spo2) if inp.spo2 is not None else np.nan
+        rr = float(inp.respiration) if inp.respiration is not None else np.nan
+        temp = float(inp.temperature) if inp.temperature is not None else np.nan
+        gluc = float(inp.glucose) if inp.glucose is not None else np.nan
+        w = float(inp.weight) if inp.weight is not None else np.nan
+        prior = float(getattr(inp, "prior_admissions_90d", 0) or 0)
+        comorb = float(getattr(inp, "comorbidity_count", 0) or 0)
+
+        # CRITICAL checks (override to HIGH)
+        # - heart rate impossible / extremely low or absent
+        if hr == 0 or hr < 30:
+            critical += 1
+            reasons.append(f"heart_rate={hr} (critical — possible cardiac arrest or severe bradycardia)")
+
+        # - extreme tachycardia
+        if hr >= 140:
+            critical += 1
+            reasons.append(f"heart_rate={hr} (critical — severe tachycardia)")
+
+        # - very low oxygen saturation
+        if spo2 < 85:
+            critical += 1
+            reasons.append(f"spo2={spo2}% (critical hypoxemia)")
+
+        # - dangerously low/high blood pressure
+        if not np.isnan(s):
+            if s < 80 or s > 200:
+                critical += 1
+                reasons.append(f"systolic={s} (critical blood pressure)")
+
+        if not np.isnan(d):
+            if d < 50 or d > 130:
+                critical += 1
+                reasons.append(f"diastolic={d} (critical blood pressure)")
+
+        # - respiratory rate dangerously high/low
+        if rr < 8 or rr > 35:
+            critical += 1
+            reasons.append(f"respiratory_rate={rr} (critical)")
+
+        # - temperature extreme
+        if temp < 92 or temp > 105:
+            critical += 1
+            reasons.append(f"temperature={temp} (critical)")
+
+        # - glucose extremely high/low
+        if gluc > 400 or gluc < 30:
+            critical += 1
+            reasons.append(f"glucose={gluc} (critical)")
+
+        # MODERATE checks (bump to medium)
+        if 30 <= hr < 40 or 100 <= hr < 140:
+            moderate += 1
+            reasons.append(f"heart_rate={hr} (moderately abnormal)")
+
+        if 85 <= spo2 < 92:
+            moderate += 1
+            reasons.append(f"spo2={spo2}% (low)")
+
+        if 80 <= s < 90 or 160 < s <= 200:
+            moderate += 1
+            reasons.append(f"systolic={s} (moderate)")
+
+        if 50 <= d < 60 or 110 < d <= 130:
+            moderate += 1
+            reasons.append(f"diastolic={d} (moderate)")
+
+        # severe recent history
+        if prior >= 2 or comorb >= 3:
+            moderate += 1
+            reasons.append(f"prior_admissions_90d={prior} or comorbidity_count={comorb} (risk history)")
+
+        # weight obviously wrong / missing
+        if w == 0 or np.isnan(w):
+            moderate += 1
+            reasons.append(f"weight={w} (missing or zero)")
+
+        # Build result
+        if critical > 0:
+            return True, "high", "; ".join(reasons), 0.95
+        if moderate >= 2:
+            return True, "medium", "; ".join(reasons), 0.60
+        return False, None, None, None
+
+    override, override_level, override_reason, override_min_prob = check_vital_overrides(data)
+
+    # enforce override if needed
+    if override:
+        # bump probability if below min
+        if override_min_prob is not None and proba < override_min_prob:
+            proba = float(override_min_prob)
+        label = 1 if override_level == "high" else int(proba >= 0.5)
+        risk = override_level
+        # update the readmission observation and add override note
+        for obs in observations:
+            if obs["name"] == "readmission_risk":
+                obs["value"] = proba
+                obs["level"] = risk
+                obs["description"] = obs["description"] + " (OVERRIDDEN by rule: " + (override_reason or "critical vitals") + ")"
+                break
+
     result = {
         "status": "ok",
         "patient_id": str(data.patient_id),
         "probability": proba,
-        "predicted_label": label,
+        "predicted_label": int(label),
         "risk": risk,
         "anomaly_score": anomaly_score,
         "anomaly_flag": anomaly_flag,
         "observations": observations
     }
+
+    # add override reason in top-level output for transparency
+    if override:
+        result["override_applied"] = True
+        result["override_reason"] = override_reason
+    else:
+        result["override_applied"] = False
 
     result["description"] = ai_generate_summary(result)
     result["timestamp"] = now_iso
