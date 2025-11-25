@@ -28,13 +28,15 @@ load_dotenv()
 # Config / env
 # ----------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")  # change if needed
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-MODEL_LOCAL = os.getenv("MODEL_LOCAL_PATH", "xgboost_model.joblib")
-PRE_LOCAL = os.getenv("PREPROCESSOR_LOCAL_PATH", "preprocessor.joblib")
-ANOMALY_LOCAL = os.getenv("ANOMALY_LOCAL_PATH", "anomaly_model.joblib")
+# Model files (LOCAL relative paths – correct for Render)
+MODEL_LOCAL = "xgboost_model.joblib"
+PRE_LOCAL = "preprocessor.joblib"
+ANOMALY_LOCAL = "anomaly_model.joblib"
 
-MODEL_URL = os.getenv("MODEL_URL")            # presigned URL or http(s) path
+# Optional URLs to download from
+MODEL_URL = os.getenv("MODEL_URL")
 PREPROCESSOR_URL = os.getenv("PREPROCESSOR_URL")
 ANOMALY_URL = os.getenv("ANOMALY_URL")
 
